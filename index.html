@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>School Substitute Teacher Management System</title>
+<link rel="stylesheet" href="style.css">
+<!-- ADD-ON: PWA / Android-wrapper (Bubblewrap/TWA) support -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b3d6e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="icons/favicon.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+</head>
+<body>
+
+<div id="apiWarningBanner"></div>
+
+<!-- ===================== HEADER ===================== -->
+<header class="topbar">
+  <div class="brand">
+    <img id="brandLogo" class="brand-logo" alt="" src="">
+    <div class="brand-text">
+      <h1 id="brandName">Government School</h1>
+      <span id="brandSub">Substitute Teacher Management System</span>
+    </div>
+  </div>
+
+  <div class="clock-block">
+    <div id="clockDay" class="clock-day">--</div>
+    <div id="clockDate" class="clock-date">-- --- ----</div>
+    <div id="clockTime" class="clock-time">--:--:-- --</div>
+  </div>
+
+  <div class="topbar-actions">
+    <span id="roleBadge" class="role-badge" style="display:none"></span>
+    <button id="adminLoginBtn" class="btn login-btn">Admin Login</button>
+    <button id="teacherLoginBtn" class="btn login-btn">Teacher Login</button>
+    <button id="adminLogoutBtn" class="btn login-btn" style="display:none">Admin Logout</button>
+    <button id="themeToggle" class="icon-btn" title="Toggle dark / light mode" aria-label="Toggle theme">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+    </button>
+    <button id="menuToggle" class="icon-btn nav-burger" title="Menu" aria-label="Open menu">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- ===================== NAVIGATION ===================== -->
+<nav id="mainNav" class="mainnav">
+  <button class="navbtn active" data-page="dashboard">Dashboard</button>
+  <button class="navbtn" data-page="profile">School Profile</button>
+  <button class="navbtn" data-page="teachers">Teachers</button>
+  <button class="navbtn" data-page="timetable">Timetable</button>
+  <button class="navbtn" data-page="attendance">Attendance</button>
+  <button class="navbtn" data-page="substitute">Substitute Duty</button>
+  <button class="navbtn" data-page="sheet">Print Sheet</button>
+  <button class="navbtn" data-page="reports">Reports</button>
+  <button class="navbtn" data-page="search">Search</button>
+  <button class="navbtn" data-page="settings">Settings</button>
+</nav>
+
+<main id="app">
+
+  <!-- ============= DASHBOARD ============= -->
+  <section id="page-dashboard" class="page active">
+    <h2 class="page-title">Dashboard</h2>
+
+    <div class="card live-period-card">
+      <div class="live-period-row">
+        <div class="live-period-block">
+          <div class="lbl">🔴 Current / Running Period</div>
+          <div class="val" id="liveCurrentPeriod">--</div>
+        </div>
+        <div class="live-period-block">
+          <div class="lbl">⏭ Next Period</div>
+          <div class="val" id="liveNextPeriod">--</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADD-ON: Cloud Sync (Admin) — see gate.js / sync.js. Public visitors and
+         teachers never see this; it's only revealed in admin-mode by CSS. -->
+    <div class="card admin-only" id="cloudSyncCard">
+      <div class="card-head">
+        <h3>☁ Cloud Sync</h3>
+        <span class="muted" id="cloudSyncStatusText">Checking…</span>
+      </div>
+      <div class="actions-row">
+        <button class="btn primary" id="adminSyncNowBtn">⟳ Sync Now</button>
+        <span class="muted" id="adminLastSyncText">Last Synced: never</span>
+      </div>
+    </div>
+
+    <div class="stat-grid" id="statGrid"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Live: This Period, Every Class</h3>
+        <span class="muted">Updates automatically - no refresh needed</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="liveClassTable">
+          <thead><tr>
+            <th>Level</th><th>Class</th><th>Subject</th><th>Regular Teacher</th><th>Status</th><th>Substitute Teacher</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Currently Free Teachers</h3>
+      </div>
+      <div class="table-wrap" id="liveFreeTeachersWrap"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Today's Substitute Duties</h3>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="dashSubTable">
+          <thead><tr>
+            <th>Absent Teacher</th><th>Reason</th><th>Class</th><th>Period</th><th>Subject</th><th>Substitute</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SCHOOL PROFILE ============= -->
+  <section id="page-profile" class="page">
+    <h2 class="page-title">School Profile</h2>
+    <div class="card">
+      <div class="form-grid">
+        <label>School Logo
+          <input type="file" id="p_logo" accept="image/*">
+        </label>
+        <label>Official School Stamp
+          <input type="file" id="p_stamp" accept="image/*">
+        </label>
+        <label>School Name
+          <input type="text" id="p_name" placeholder="Government High School ...">
+        </label>
+        <label>EMIS Code
+          <input type="text" id="p_emis" placeholder="EMIS Code">
+        </label>
+        <label>District
+          <input type="text" id="p_district">
+        </label>
+        <label>Tehsil
+          <input type="text" id="p_tehsil">
+        </label>
+        <label class="span2">Address
+          <input type="text" id="p_address">
+        </label>
+        <label>Phone
+          <input type="text" id="p_phone">
+        </label>
+        <label>Email
+          <input type="email" id="p_email">
+        </label>
+        <label>Academic Session
+          <input type="text" id="p_session" placeholder="e.g. 2026-2027">
+        </label>
+        <label>Head Teacher Name
+          <input type="text" id="p_htname">
+        </label>
+        <label>Head Teacher Designation
+          <input type="text" id="p_htdesig">
+        </label>
+        <label>Head Teacher Signature
+          <input type="file" id="p_signature" accept="image/*">
+        </label>
+      </div>
+      <div class="preview-row" id="profilePreview"></div>
+      <div class="actions-row">
+        <button class="btn primary" id="saveProfileBtn">Save Profile</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= TEACHERS ============= -->
+  <section id="page-teachers" class="page">
+    <h2 class="page-title">Teacher Database <span class="muted" id="teacherCount"></span></h2>
+    <div class="card">
+      <div class="toolbar">
+        <input type="text" id="teacherSearch" placeholder="Search teacher by name / subject...">
+        <select id="teacherFilterLevel">
+          <option value="">All Levels</option>
+          <option>Primary</option><option>Middle</option><option>High</option>
+        </select>
+        <select id="teacherSort">
+          <option value="name">Sort: Name</option>
+          <option value="designation">Sort: Designation</option>
+          <option value="subject">Sort: Subject</option>
+        </select>
+        <button class="btn primary" id="addTeacherBtn">+ Add Teacher</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="teacherTable">
+          <thead><tr>
+            <th></th><th>Name</th><th>Designation</th><th>Subject</th><th>Level</th><th>Mobile</th>
+            <th>Class Teacher</th><th>Locked</th><th>Actions</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= TIMETABLE ============= -->
+  <section id="page-timetable" class="page">
+    <h2 class="page-title">School Timetable</h2>
+    <div class="card">
+      <div class="toolbar">
+        <div class="seg" id="ttLevelSeg">
+          <button class="seg-btn active" data-level="Primary">Primary</button>
+          <button class="seg-btn" data-level="Middle">Middle</button>
+          <button class="seg-btn" data-level="High">High</button>
+        </div>
+        <select id="ttClass"></select>
+        <button class="btn" id="manageClassesBtn">Manage Classes</button>
+        <button class="btn" id="managePeriodsBtn">Manage Periods</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="ttTable">
+          <thead><tr><th>Period</th><th>Time</th><th>Subject</th><th>Teacher</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= ATTENDANCE ============= -->
+  <section id="page-attendance" class="page">
+    <h2 class="page-title">Daily Attendance</h2>
+    <div class="card">
+      <div class="toolbar">
+        <label class="inline-label">Date <input type="date" id="attDate"></label>
+        <button class="btn" id="markAllPresentBtn">Mark All Present</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="attTable">
+          <thead><tr><th>Teacher</th><th>Level</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SUBSTITUTE DUTY ============= -->
+  <section id="page-substitute" class="page">
+    <h2 class="page-title">Substitute Duty</h2>
+    <div class="card">
+      <div class="toolbar">
+        <label class="inline-label">Date <input type="date" id="subDate"></label>
+        <button class="btn primary" id="generateSubBtn">⟳ Generate Substitute Duty</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="subTable">
+          <thead><tr>
+            <th>Absent Teacher</th><th>Reason</th><th>Level</th><th>Class</th><th>Period</th><th>Time</th>
+            <th>Subject</th><th>Substitute Teacher</th><th>Remarks</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= PRINT SHEET ============= -->
+  <section id="page-sheet" class="page">
+    <h2 class="page-title">Substitute Duty Sheet</h2>
+    <div class="card no-print">
+      <div class="toolbar">
+        <label class="inline-label">Date <input type="date" id="sheetDate"></label>
+        <button class="btn primary" id="printSheetBtn">🖨 Print / Save PDF</button>
+      </div>
+    </div>
+
+    <div id="printArea" class="print-sheet">
+      <div class="ps-header">
+        <img id="ps_logo" class="ps-logo" alt="">
+        <div class="ps-title">
+          <h2 id="ps_schoolname">School Name</h2>
+          <div id="ps_meta1">District | Tehsil | EMIS: -</div>
+          <div id="ps_meta2">Address</div>
+          <h3>Substitute Teacher Duty Sheet</h3>
+        </div>
+      </div>
+      <div class="ps-info">
+        <span>Date: <b id="ps_date"></b></span>
+        <span>Day: <b id="ps_day"></b></span>
+        <span>Time: <b id="ps_time"></b></span>
+      </div>
+      <table class="ps-table">
+        <thead><tr>
+          <th>#</th><th>Absent Teacher</th><th>Reason</th><th>Class</th><th>Subject</th>
+          <th>Period</th><th>Timing</th><th>Substitute Teacher</th><th>Remarks</th>
+        </tr></thead>
+        <tbody id="ps_body"></tbody>
+      </table>
+      <div class="ps-sign-row">
+        <div class="ps-sign"><span>Prepared By</span><div class="line"></div></div>
+        <div class="ps-sign"><span>Verified By</span><div class="line"></div></div>
+        <div class="ps-sign">
+          <span id="ps_ht_desig">Head Teacher</span>
+          <img id="ps_signature" class="ps-sig-img" alt="">
+          <div class="line"></div>
+          <small id="ps_ht_name"></small>
+        </div>
+        <div class="ps-sign ps-stamp">
+          <img id="ps_stamp" class="ps-stamp-img" alt="">
+          <small>Official Stamp</small>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= REPORTS ============= -->
+  <section id="page-reports" class="page">
+    <h2 class="page-title">Reports</h2>
+    <div class="card no-print">
+      <div class="toolbar">
+        <div class="seg" id="repTypeSeg">
+          <button class="seg-btn active" data-rep="daily">Daily</button>
+          <button class="seg-btn" data-rep="weekly">Weekly</button>
+          <button class="seg-btn" data-rep="monthly">Monthly</button>
+          <button class="seg-btn" data-rep="teacher">Teacher-wise</button>
+        </div>
+        <input type="date" id="repDate">
+        <select id="repTeacher"></select>
+        <button class="btn" id="repPrintBtn">🖨 Print Report</button>
+      </div>
+      <div id="reportOutput" class="table-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ============= SEARCH ============= -->
+  <section id="page-search" class="page">
+    <h2 class="page-title">Search</h2>
+    <div class="card">
+      <div class="toolbar">
+        <select id="searchType">
+          <option value="teacher">By Teacher</option>
+          <option value="class">By Class</option>
+          <option value="subject">By Subject</option>
+          <option value="date">By Date</option>
+          <option value="substitute">By Substitute Teacher</option>
+        </select>
+        <input type="text" id="searchText" placeholder="Type to search...">
+        <input type="date" id="searchDate" style="display:none">
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="searchResults">
+          <thead><tr><th>Date</th><th>Absent Teacher</th><th>Class</th><th>Subject</th><th>Period</th><th>Substitute</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= SETTINGS ============= -->
+  <section id="page-settings" class="page">
+    <h2 class="page-title">Settings</h2>
+    <div class="card">
+      <div class="form-grid">
+        <label>School Day Starts <input type="time" id="s_start"></label>
+        <label>School Day Ends <input type="time" id="s_end"></label>
+        <label>Saturday Working
+          <select id="s_saturday"><option value="no">No</option><option value="yes">Yes</option></select>
+        </label>
+        <label>Academic Session <input type="text" id="s_session"></label>
+      </div>
+      <div class="actions-row"><button class="btn primary" id="saveSettingsBtn">Save Settings</button></div>
+    </div>
+
+    <div class="card">
+      <h3>Substitute Eligibility Rules</h3>
+      <p class="muted">Lock a teacher category out of covering a specific class category. A lock only blocks that
+        one target - it does NOT make the teacher unavailable anywhere else. Each cell below is completely
+        independent, exactly as described: e.g. locking "Primary" teachers for "High" still leaves them eligible
+        for Middle and Primary classes.</p>
+      <div class="table-wrap">
+        <table class="data-table" id="lockMatrixTable">
+          <thead><tr><th>Teacher Category</th><th>Locked for Primary</th><th>Locked for Middle</th><th>Locked for High</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="actions-row"><button class="btn primary" id="saveLocksBtn">Save Eligibility Rules</button></div>
+    </div>
+
+    <div class="card">
+      <h3>Period Bell / Ringing Tune</h3>
+      <p class="muted">The configured tune plays automatically whenever a period ends and the next one begins.</p>
+      <div class="form-grid">
+        <label>Bell Enabled
+          <select id="bell_enabled"><option value="yes">Yes</option><option value="no">No</option></select>
+        </label>
+        <label>Ringing Tune
+          <select id="bell_tune">
+            <option value="classic">Classic School Bell</option>
+            <option value="digital">Digital Chime</option>
+            <option value="buzzer">Buzzer</option>
+            <option value="custom">Custom Upload...</option>
+          </select>
+        </label>
+        <label>Volume
+          <input type="range" id="bell_volume" min="0" max="1" step="0.05">
+        </label>
+        <label>Custom Sound File (used when tune = Custom)
+          <input type="file" id="bell_custom" accept="audio/*">
+        </label>
+      </div>
+      <div class="actions-row">
+        <button class="btn" id="bellTestBtn">🔔 Test Bell</button>
+        <button class="btn primary" id="saveBellBtn">Save Bell Settings</button>
+      </div>
+    </div>
+
+    <!-- ADD-ON: Teacher Login Management — see gate.js / sync.js -->
+    <div class="card" id="teacherLoginMgmtCard">
+      <div class="card-head">
+        <h3>Teacher Login Management</h3>
+        <span class="muted">Firebase: <span id="fbStatusBadge">checking…</span></span>
+      </div>
+      <p class="muted">Give a teacher their own Gmail + Access Code login, locked to one device. Only Admin can reset a device.</p>
+      <div class="table-wrap">
+        <table class="data-table" id="teacherLoginTable">
+          <thead><tr>
+            <th>Teacher</th><th>Gmail</th><th>Access Code</th><th>Status</th><th>Device</th><th>Actions</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ADD-ON: Admin Account (change password) — see gate.js -->
+    <div class="card" id="adminAccountCard">
+      <h3>Admin Account</h3>
+      <div class="form-grid">
+        <label>Current Password<input type="password" id="adm_oldpass"></label>
+        <label>New Password<input type="password" id="adm_newpass"></label>
+        <label>Confirm New Password<input type="password" id="adm_newpass2"></label>
+      </div>
+      <div class="actions-row">
+        <button class="btn primary" id="adminChangePassBtn">Change Password</button>
+        <span class="muted" id="adminPassMsg"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Data Management</h3>
+      <div class="actions-row">
+        <button class="btn" id="exportBtn">⬇ Export Backup (JSON)</button>
+        <button class="btn" id="importBtn">⬆ Import Backup (JSON)</button>
+        <button class="btn danger" id="resetBtn">⚠ Reset All Data</button>
+      </div>
+      <p class="muted" style="margin-top:8px;">Every save is written straight to the SQLite database file on disk automatically — there is nothing else to sync. Use Export to save a portable copy, or Import to restore one.</p>
+    </div>
+
+    <div class="card">
+      <h3>Restore From an Older Backup</h3>
+      <p class="muted">If teachers, timetables or attendance look missing, an older backup snapshot may still have them. Pick one below to bring it back.</p>
+      <div class="actions-row">
+        <select id="backupList" style="min-width:280px;"><option value="">Loading backups…</option></select>
+        <button class="btn" id="refreshBackupsBtn">↻ Refresh List</button>
+        <button class="btn danger" id="restoreBackupBtn">⟲ Restore Selected Backup</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ===================== MODAL ROOT ===================== -->
+<div id="modalRoot" class="modal-root"></div>
+
+<div id="toast" class="toast"></div>
+
+<!-- ============================================================
+     ADD-ON: Login / Device-Binding / Firebase Sync layer.
+     Everything below and the scripts that drive it are new — the
+     Timetable, Substitute Generation, Admin Panel and offline system
+     above are untouched. See gate.js / sync.js / firebase-config.js.
+     ============================================================ -->
+
+<!-- Admin Login / Teacher Login overlay -->
+<div id="authOverlay" class="auth-overlay">
+  <div class="auth-box">
+    <button class="auth-close" id="authCloseBtn" title="Back to Dashboard" aria-label="Close">&times;</button>
+
+    <div id="authAdminLoadingPanel" class="auth-panel" style="display:none">
+      <h2>Admin Login</h2>
+      <p class="muted">Checking account…</p>
+    </div>
+
+    <div id="authAdminOfflinePanel" class="auth-panel" style="display:none">
+      <h2>Admin Login</h2>
+      <p class="muted">No internet connection. The first login on a new device needs internet so the account can be verified. If you already logged in on this device before, reopen the app and it will resume automatically.</p>
+    </div>
+
+    <div id="authAdminSetupPanel" class="auth-panel" style="display:none">
+      <h2>Create Admin Account</h2>
+      <p class="muted small">No Admin account exists for this deployment yet. This one-time setup locks the Admin Panel to this device.</p>
+      <label>Username<input type="text" id="setupUsernameInput" autocomplete="username"></label>
+      <label>Password<input type="password" id="setupPasswordInput" autocomplete="new-password"></label>
+      <label>Confirm Password<input type="password" id="setupPassword2Input" autocomplete="new-password"></label>
+      <div class="auth-error" id="adminSetupError"></div>
+      <button class="btn primary" id="adminSetupSubmitBtn">Create Admin Account</button>
+    </div>
+
+    <div id="authAdminPanel" class="auth-panel" style="display:none">
+      <h2>Admin Login</h2>
+      <label>Username<input type="text" id="adminUsernameInput" autocomplete="username"></label>
+      <label>Password<input type="password" id="adminPasswordInput" autocomplete="current-password"></label>
+      <div class="auth-error" id="adminLoginError"></div>
+      <button class="btn primary" id="adminLoginSubmitBtn">Login</button>
+      <p class="muted small" id="adminFallbackHint" style="display:none">⚠ Firebase is not configured — this login is <b>not secure</b> for a shared/public link (default is admin / admin123, per browser). Configure Firebase to lock this to one device.</p>
+      <button class="btn tiny" id="adminUseRecoveryBtn" style="margin-top:10px;">Locked out? Use Recovery Key</button>
+    </div>
+
+    <div id="authAdminRecoveryPanel" class="auth-panel" style="display:none">
+      <h2>Recover Admin Access</h2>
+      <p class="muted small">This moves the Admin account to this device and unbinds the old one.</p>
+      <label>Username<input type="text" id="recUsernameInput" autocomplete="username"></label>
+      <label>Recovery Key<input type="text" id="recKeyInput" placeholder="ADM-XXXX-XXXX-XXXX"></label>
+      <label>New Password (optional)<input type="password" id="recNewPasswordInput" autocomplete="new-password"></label>
+      <div class="auth-error" id="adminRecoveryError"></div>
+      <button class="btn primary" id="adminRecoverySubmitBtn">Recover This Device</button>
+      <button class="btn tiny" id="adminBackToLoginBtn" style="margin-top:10px;">Back to Login</button>
+    </div>
+
+    <div id="authTeacherPanel" class="auth-panel" style="display:none">
+      <h2>Teacher Login</h2>
+      <label>Gmail<input type="email" id="teacherGmailInput" autocomplete="username" placeholder="teacher@gmail.com"></label>
+      <label>Access Code<input type="text" id="teacherCodeInput" placeholder="TCH-XXXXXX" autocomplete="one-time-code"></label>
+      <div class="auth-error" id="teacherLoginError"></div>
+      <button class="btn primary" id="teacherLoginSubmitBtn">Login</button>
+      <p class="muted small">Ask your Admin for your Gmail + Access Code if you don't have one yet. Your account works on one device only.</p>
+    </div>
+  </div>
+</div>
+
+<!-- One-time Recovery Key reveal — shown right after Admin Setup -->
+<div id="recoveryKeyOverlay" class="auth-overlay">
+  <div class="auth-box">
+    <h2>Save Your Recovery Key</h2>
+    <p class="muted small">If your device is lost or broken, this is the <b>only</b> way to move the Admin account to a new device. It will not be shown again. Store it somewhere safe.</p>
+    <div class="access-code" id="recoveryKeyDisplay" style="display:block;text-align:center;font-size:18px;padding:14px;margin:14px 0;"></div>
+    <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;">
+      <input type="checkbox" id="recoveryKeySavedCheck" style="width:auto;margin-top:2px;">
+      <span>I have saved this Recovery Key somewhere safe.</span>
+    </label>
+    <button class="btn primary" id="recoveryKeyContinueBtn" disabled style="margin-top:12px;">Continue to Admin Panel</button>
+  </div>
+</div>
+
+<!-- Teacher Dashboard (shown instead of the Admin Panel once a teacher is logged in) -->
+<div id="teacherDashboardOverlay" class="teacher-dash-overlay">
+  <header class="teacher-dash-header">
+    <div>
+      <h2 id="tdTeacherName">Teacher</h2>
+      <span id="tdTodayDate" class="muted"></span>
+    </div>
+    <div class="teacher-dash-actions">
+      <span id="tdSyncStatus" class="status-pill">—</span>
+      <button class="btn" id="teacherSyncNowBtn">⟳ Sync Now</button>
+      <button class="btn danger" id="teacherLogoutBtn">Logout</button>
+    </div>
+  </header>
+
+  <div class="card notify-banner" id="tdNotifyBanner" style="display:none">
+    🔔 <b>NEW SUBSTITUTE AVAILABLE</b> — please sync to see it.
+    <button class="btn primary" id="tdNotifySyncBtn">Sync Now</button>
+  </div>
+
+  <div class="card">
+    <div class="live-period-row">
+      <div class="live-period-block">
+        <div class="lbl">🔴 Current / Running Period</div>
+        <div class="val" id="tdCurrentPeriod">--</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Today's Periods</h3>
+    <div class="table-wrap">
+      <table class="data-table" id="tdPeriodsTable">
+        <thead><tr><th>Period</th><th>Time</th><th>Class</th><th>Subject</th><th>Type</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="muted small" id="tdLastSync"></div>
+</div>
+
+<script src="storage.js"></script>
+<script src="script.js"></script>
+
+<!-- ADD-ON scripts (loaded after the existing app so they can reuse its
+     STATE/helper functions read-only, without modifying script.js at all) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="sync.js"></script>
+<script src="gate.js"></script>
+
+<!-- ADD-ON: register the service worker (offline app-shell caching) -->
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("service-worker.js").catch((e) => console.error("SW registration failed:", e));
+    });
+  }
+</script>
+</body>
+</html>

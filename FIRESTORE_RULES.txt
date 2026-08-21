@@ -1,0 +1,57 @@
+Paste this into Firebase Console -> Firestore Database -> Rules -> Publish.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Admin account: username, password hash, recovery-key hash, device
+    // binding. Any signed-in client can read/write — see the note below.
+    match /adminLogins/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Teacher login records: Gmail, Access Code, device binding.
+    // Any signed-in client (the app signs everyone in anonymously) can
+    // read/write. See the important note below.
+    match /teacherLogins/{teacherId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // "New substitute available" flag per teacher.
+    match /substituteNotify/{teacherId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Synced timetable / substitute / period data for offline teacher use.
+    match /schoolData/{docId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+
+-----------------------------------------------------------------------------
+IMPORTANT — please read, this affects how "private" teacher data really is
+-----------------------------------------------------------------------------
+This app has no backend server (per the brief: static hosting, e.g. GitHub
+Pages, no custom domain). To keep Gmail + Access Code verification and
+device binding working, it signs every visitor in to Firebase Anonymous
+Auth automatically in the background — that's what "request.auth != null"
+checks above.
+
+What this DOES protect against: a stranger who has never opened the app
+querying your Firestore data with no credentials at all.
+
+What this does NOT do: it does not prove WHICH teacher is asking. Because
+there's no server to issue each teacher a personal, verified token, any
+signed-in client (i.e. anyone who has opened this same app, including any
+teacher) can technically read or write any teacher's record with these
+rules — the Gmail + Access Code + one-device check is enforced by the
+app's own logic (gate.js), not by the database itself.
+
+If your Firestore data must be strictly private per teacher (not just
+"blocked from the open internet"), the only way to get that is a small
+backend (e.g. a Firebase Cloud Function) that issues each teacher a signed
+custom auth token after checking their Gmail + Access Code server-side,
+then rules keyed on request.auth.uid. That is real backend infrastructure
+and is out of scope for this static, no-server build — happy to build it
+as a follow-up if you'd like stronger guarantees.
