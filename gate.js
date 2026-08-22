@@ -103,6 +103,7 @@ async function adminSetup(username, password, password2) {
   };
   const remote = await Sync.saveAdminAuthRemote(rec);
   if (!remote.ok) return { ok: false, error: remote.offline ? "You're offline — connect to the internet for this one-time Admin setup." : (remote.error || "Could not save to Firebase.") };
+  ExtStore.set("adminDeviceCache", { username: u, passwordHash: rec.passwordHash, deviceId, boundAt: rec.boundAt });
   setAdminSession({ username: u, deviceId, boundAt: rec.boundAt, loggedInAt: new Date().toISOString() });
   return { ok: true, recoveryKey };
 }
@@ -112,11 +113,16 @@ async function adminLoginSecure(username, password) {
   const deviceId = getDeviceId();
 
   if (!Sync.isOnline()) {
-    const session = getAdminSession();
-    if (session && !session.local && session.username.toLowerCase() === u.toLowerCase() && session.deviceId === deviceId) {
+    // Uses a persistent device cache (NOT the login session) so that a
+    // logout followed by an offline re-login on the SAME registered
+    // device still works — logout only ends the session, it never
+    // unregisters the device.
+    const cache = ExtStore.get("adminDeviceCache");
+    if (cache && cache.deviceId === deviceId && cache.username.toLowerCase() === u.toLowerCase() && (await sha256(password || "")) === cache.passwordHash) {
+      setAdminSession({ username: cache.username, deviceId, boundAt: cache.boundAt, loggedInAt: new Date().toISOString() });
       return { ok: true, offlineContinue: true };
     }
-    return { ok: false, error: "No internet connection. The first login on a new device needs internet to verify the account." };
+    return { ok: false, error: "No internet connection. The first login on a new device (or after a password change) needs internet to verify the account." };
   }
 
   const remote = await Sync.fetchAdminAuth();
@@ -131,6 +137,7 @@ async function adminLoginSecure(username, password) {
     remote.deviceId = deviceId; remote.deviceStatus = "BOUND"; remote.boundAt = new Date().toISOString(); remote.updatedAt = new Date().toISOString();
     await Sync.saveAdminAuthRemote(remote);
   }
+  ExtStore.set("adminDeviceCache", { username: remote.username, passwordHash: remote.passwordHash, deviceId, boundAt: remote.boundAt });
   setAdminSession({ username: remote.username, deviceId, boundAt: remote.boundAt, loggedInAt: new Date().toISOString() });
   return { ok: true };
 }
@@ -146,6 +153,7 @@ async function adminRecoverDevice(username, recoveryKey, newPassword) {
   if (newPassword && newPassword.length >= 6) remote.passwordHash = await sha256(newPassword);
   const saved = await Sync.saveAdminAuthRemote(remote);
   if (!saved.ok) return { ok: false, error: saved.error || "Could not save." };
+  ExtStore.set("adminDeviceCache", { username: remote.username, passwordHash: remote.passwordHash, deviceId, boundAt: remote.boundAt });
   setAdminSession({ username: remote.username, deviceId, boundAt: remote.boundAt, loggedInAt: new Date().toISOString() });
   return { ok: true };
 }
@@ -161,7 +169,12 @@ async function changeAdminPassword(oldPass, newPass) {
   remote.passwordHash = await sha256(newPass);
   remote.updatedAt = new Date().toISOString();
   const saved = await Sync.saveAdminAuthRemote(remote);
-  return saved.ok ? { ok: true } : { ok: false, error: saved.error };
+  if (saved.ok) {
+    const cache = ExtStore.get("adminDeviceCache");
+    if (cache) { cache.passwordHash = remote.passwordHash; ExtStore.set("adminDeviceCache", cache); }
+    return { ok: true };
+  }
+  return { ok: false, error: saved.error };
 }
 
 /* ---------------------------- Teacher login records (admin-managed) ------- */
@@ -255,9 +268,14 @@ async function teacherLogin(gmail, accessCode) {
   const deviceId = getDeviceId();
 
   if (!Sync.isOnline()) {
-    const session = getTeacherSession();
-    if (session && session.gmail === gm && session.accessCode === code && session.deviceId === deviceId) {
-      return { ok: true, offlineContinue: true, teacherId: session.teacherId };
+    // Uses a persistent per-teacher device cache (NOT the login session)
+    // so a logout followed by an offline re-login on the SAME registered
+    // device still works — logout only ends the session, it never
+    // unregisters the device.
+    const cache = ExtStore.get("teacherDeviceCache:" + gm);
+    if (cache && cache.accessCode === code && cache.deviceId === deviceId) {
+      ExtStore.set("teacherSession", { teacherId: cache.teacherId, gmail: gm, accessCode: code, deviceId, boundAt: cache.boundAt });
+      return { ok: true, offlineContinue: true, teacherId: cache.teacherId };
     }
     return { ok: false, error: "No internet connection. The first login on a device needs internet so Admin's server can verify your account." };
   }
@@ -290,6 +308,7 @@ async function teacherLogin(gmail, accessCode) {
   if (idx >= 0) list[idx] = Object.assign({}, list[idx], remote); else list.push(remote);
   saveTeacherLogins(list);
 
+  ExtStore.set("teacherDeviceCache:" + gm, { teacherId: remote.teacherId, accessCode: code, deviceId, boundAt: remote.boundAt });
   ExtStore.set("teacherSession", { teacherId: remote.teacherId, gmail: gm, accessCode: code, deviceId, boundAt: remote.boundAt });
   return { ok: true, teacherId: remote.teacherId };
 }
@@ -350,44 +369,111 @@ function computeTeacherTodayRows(dataSrc, teacherId) {
 }
 
 /* ---------------------------- Sync actions --------------------------------- */
+
+// Shared core used by both the manual "Sync Now" button and the silent
+// background auto-sync loop below. opts.silent=true suppresses toasts/
+// button text changes (used by auto-sync so it doesn't nag the admin).
+async function performAdminSync(opts) {
+  opts = opts || {};
+  if (!Sync.isConfigured()) {
+    if (!opts.silent) toast("Firebase is not configured yet — see firebase-config.js.", 6000);
+    renderCloudSyncCard(); return { ok: false };
+  }
+  if (!Sync.isOnline()) {
+    ExtStore.set("adminPendingSync", true);
+    if (!opts.silent) toast("You're offline — connect to the internet to Sync Now.", 5000);
+    renderCloudSyncCard(); return { ok: false, offline: true };
+  }
+
+  const today = todayISO();
+  const prevSnapshot = ExtStore.get("lastPushedSubsForNotify", {});
+  const todays = STATE.substitutes[today] || [];
+  const currentByTeacher = {};
+  todays.forEach((r) => {
+    if (r.substituteTeacherId) {
+      (currentByTeacher[r.substituteTeacherId] = currentByTeacher[r.substituteTeacherId] || []).push(r.id + ":" + r.period);
+    }
+  });
+  const changedTeacherIds = Object.keys(currentByTeacher).filter((tid) => {
+    const prev = (prevSnapshot[tid] || []).slice().sort().join(",");
+    const cur = currentByTeacher[tid].slice().sort().join(",");
+    return prev !== cur;
+  });
+
+  const push = await Sync.pushSchoolData();
+  if (!push.ok) {
+    if (!opts.silent) toast("Sync failed: " + (push.error || "unknown error"), 6000);
+    return { ok: false, error: push.error };
+  }
+  for (const tid of changedTeacherIds) await Sync.bumpSubstituteNotify(tid);
+  ExtStore.set("lastPushedSubsForNotify", currentByTeacher);
+
+  // Push any teacher-login records the admin edited locally while offline.
+  const logins = getTeacherLogins();
+  for (const rec of logins) await Sync.saveTeacherLoginRemote(rec);
+
+  ExtStore.set("lastAdminSync", new Date().toISOString());
+  ExtStore.set("adminPendingSync", false);
+  _lastAdminAutoSyncSnapshot = computeAdminSyncSnapshotKey();
+
+  if (opts.silent) flashAutoSyncedBadge(); else toast("✓ SYNC SUCCESSFUL");
+  renderCloudSyncCard();
+  if (document.body.classList.contains("admin-mode")) renderTeacherLoginMgmt();
+  return { ok: true };
+}
+
 async function adminSyncNow() {
   const btn = document.getElementById("adminSyncNowBtn");
-  if (!Sync.isConfigured()) { toast("Firebase is not configured yet — see firebase-config.js.", 6000); renderCloudSyncCard(); return; }
-  if (!Sync.isOnline()) { toast("You're offline — connect to the internet to Sync Now.", 5000); renderCloudSyncCard(); return; }
   if (btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
   try {
-    const today = todayISO();
-    const prevSnapshot = ExtStore.get("lastPushedSubsForNotify", {});
-    const todays = STATE.substitutes[today] || [];
-    const currentByTeacher = {};
-    todays.forEach((r) => {
-      if (r.substituteTeacherId) {
-        (currentByTeacher[r.substituteTeacherId] = currentByTeacher[r.substituteTeacherId] || []).push(r.id + ":" + r.period);
-      }
-    });
-    const changedTeacherIds = Object.keys(currentByTeacher).filter((tid) => {
-      const prev = (prevSnapshot[tid] || []).slice().sort().join(",");
-      const cur = currentByTeacher[tid].slice().sort().join(",");
-      return prev !== cur;
-    });
-
-    const push = await Sync.pushSchoolData();
-    if (!push.ok) { toast("Sync failed: " + (push.error || "unknown error"), 6000); return; }
-    for (const tid of changedTeacherIds) await Sync.bumpSubstituteNotify(tid);
-    ExtStore.set("lastPushedSubsForNotify", currentByTeacher);
-
-    // Push any teacher-login records the admin edited locally while offline.
-    const logins = getTeacherLogins();
-    for (const rec of logins) await Sync.saveTeacherLoginRemote(rec);
-
-    ExtStore.set("lastAdminSync", new Date().toISOString());
-    toast("✓ SYNC SUCCESSFUL");
+    await performAdminSync({ silent: false });
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "⟳ Sync Now"; }
-    renderCloudSyncCard();
-    if (document.body.classList.contains("admin-mode")) renderTeacherLoginMgmt();
   }
 }
+
+function flashAutoSyncedBadge() {
+  const el = document.getElementById("cloudSyncStatusText");
+  if (!el) return;
+  el.textContent = "✓ auto synced";
+  setTimeout(renderCloudSyncCard, 2500);
+}
+
+// Watches STATE (teachers/periods/timetables/today's substitutes) plus
+// locally-edited teacher logins for changes and pushes them to Firebase
+// automatically when online — Admin never has to remember to press
+// Sync Now. Falls back to "PENDING SYNC" while offline and catches up
+// automatically the moment connectivity returns.
+function computeAdminSyncSnapshotKey() {
+  const today = todayISO();
+  try {
+    return JSON.stringify({
+      teachers: STATE.teachers, periods: STATE.periods, timetables: STATE.timetables,
+      substitutesToday: STATE.substitutes[today] || [], teacherLogins: getTeacherLogins()
+    });
+  } catch (e) { return String(Date.now()); }
+}
+let _lastAdminAutoSyncSnapshot = null;
+let _adminAutoSyncTimer = null;
+function startAdminAutoSync() {
+  if (_adminAutoSyncTimer) return;
+  _lastAdminAutoSyncSnapshot = computeAdminSyncSnapshotKey();
+  _adminAutoSyncTimer = setInterval(async () => {
+    if (!document.body.classList.contains("admin-mode")) return;
+    const snap = computeAdminSyncSnapshotKey();
+    const changed = snap !== _lastAdminAutoSyncSnapshot;
+    const owesPending = ExtStore.get("adminPendingSync");
+    if (!changed && !owesPending) return;
+    _lastAdminAutoSyncSnapshot = snap;
+    if (Sync.isOnline() && Sync.isConfigured()) {
+      await performAdminSync({ silent: true });
+    } else {
+      ExtStore.set("adminPendingSync", true);
+      renderCloudSyncCard();
+    }
+  }, 20000);
+}
+function stopAdminAutoSync() { clearInterval(_adminAutoSyncTimer); _adminAutoSyncTimer = null; }
 
 async function teacherSyncNow() {
   const session = getTeacherSession();
@@ -451,7 +537,10 @@ function teacherBellTick() {
 function renderCloudSyncCard() {
   const statusEl = document.getElementById("cloudSyncStatusText");
   if (!statusEl) return;
-  statusEl.textContent = !Sync.isConfigured() ? "not configured" : (Sync.isOnline() ? "online" : "offline");
+  const pending = ExtStore.get("adminPendingSync");
+  statusEl.textContent = !Sync.isConfigured() ? "not configured"
+    : (!Sync.isOnline() ? (pending ? "offline — PENDING SYNC" : "offline")
+      : (pending ? "syncing…" : "online"));
   const last = ExtStore.get("lastAdminSync");
   document.getElementById("adminLastSyncText").textContent = "Last Synced: " + (last ? new Date(last).toLocaleString() : "never");
   const badge = document.getElementById("fbStatusBadge");
@@ -570,9 +659,14 @@ function enterAdminMode() {
   closeAuthOverlay();
   renderCloudSyncCard();
   renderTeacherLoginMgmt();
+  startAdminAutoSync();
 }
 function exitAdminMode() {
+  // Logout only ends the session — it does NOT remove the device
+  // binding (adminDeviceCache / the Firestore deviceId stay untouched),
+  // so logging back in on this same device works instantly, online or off.
   clearAdminSession();
+  stopAdminAutoSync();
   document.body.classList.remove("admin-mode");
   document.getElementById("adminLoginBtn").style.display = "inline-block";
   document.getElementById("teacherLoginBtn").style.display = "inline-block";
@@ -753,7 +847,14 @@ function wireGateEvents() {
     if (res.ok) { document.getElementById("adm_oldpass").value = ""; document.getElementById("adm_newpass").value = ""; document.getElementById("adm_newpass2").value = ""; }
   });
 
-  window.addEventListener("online", () => { renderCloudSyncCard(); if (getTeacherSession()) setTeacherStatusText("ONLINE — SYNC AVAILABLE"); });
+  window.addEventListener("online", () => {
+    renderCloudSyncCard();
+    if (getTeacherSession()) setTeacherStatusText("ONLINE — SYNC AVAILABLE");
+    // Catch up immediately instead of waiting for the next 20s tick.
+    if (document.body.classList.contains("admin-mode") && ExtStore.get("adminPendingSync")) {
+      performAdminSync({ silent: true });
+    }
+  });
   window.addEventListener("offline", () => { renderCloudSyncCard(); if (getTeacherSession()) setTeacherStatusText("OFFLINE — USING SAVED DATA"); });
 }
 
