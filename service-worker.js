@@ -9,7 +9,7 @@
    traffic at all — Firestore/Auth requests always go straight to the
    network so Sync Now / login always uses live data.
    ========================================================================= */
-const CACHE_NAME = "substitute-tt-shell-v1";
+const CACHE_NAME = "substitute-tt-shell-v2";
 
 const APP_SHELL = [
   "./",
